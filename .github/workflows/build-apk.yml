@@ -36,13 +36,11 @@ jobs:
           PROJECT_DIR=$(dirname "$PUBSPEC_PATH")
           echo "dir=$PROJECT_DIR" >> $GITHUB_OUTPUT
 
-          # 1. 修复 Dart 源码兼容细节与放开插件版本上限以拉取支持 SDK 36 的新版插件
           sed -i 's/Icons.AutoAwesome_rounded/Icons.auto_awesome_rounded/g' "$PROJECT_DIR"/lib/screens/*.dart || true
           sed -i 's/Icons.video_Call_rounded/Icons.video_call_rounded/g' "$PROJECT_DIR"/lib/screens/*.dart || true
           sed -i 's/activeThumbColor:/activeColor:/g' "$PROJECT_DIR"/lib/screens/*.dart || true
           sed -i 's/file_picker: \^.*/file_picker: any/g' "$PROJECT_DIR/pubspec.yaml" || true
 
-          # 2. 使用云端当前 Flutter SDK 生成完全匹配的 Android 原生脚手架
           rm -rf /tmp/flutter_scaffold
           flutter create /tmp/flutter_scaffold --platforms=android --org com.example --project-name fast_video_compressor
 
@@ -60,9 +58,9 @@ jobs:
           sed -i 's/package="com.example.fast_video_compressor"//g' "$PROJECT_DIR/android/app/src/main/AndroidManifest.xml" || true
           cp -r /tmp/backup_src/mipmap-* "$PROJECT_DIR/android/app/src/main/res/" 2>/dev/null || true
 
-          # 3. 写入 compileSdk = 36、minSdk = 24、targetSdk = 35 与协程依赖
+          # 将 compileSdk 升级至 37（兼容最新版 permission_handler_android），保持 minSdk = 24、targetSdk = 35
           APP_GRADLE="$PROJECT_DIR/android/app/build.gradle.kts"
-          sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' "$APP_GRADLE" || true
+          sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 37/g; s/compileSdk = 3[0-6]/compileSdk = 37/g' "$APP_GRADLE" || true
           sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/g' "$APP_GRADLE" || true
           sed -i 's/targetSdk = flutter.targetSdkVersion/targetSdk = 35/g' "$APP_GRADLE" || true
           cat >> "$APP_GRADLE" << 'EOF'
@@ -79,7 +77,7 @@ jobs:
         run: |
           flutter pub upgrade --major-versions || flutter pub get
           PUB_DIR="${PUB_CACHE:-$HOME/.pub-cache}"
-          find "$PUB_DIR" -name "build.gradle*" -exec sed -i -E 's/compileSdkVersion[[:space:]]+3[0-5]/compileSdkVersion 36/g; s/compileSdk[[:space:]]+3[0-5]/compileSdk 36/g; s/compileSdk[[:space:]]*=[[:space:]]*3[0-5]/compileSdk = 36/g' {} + || true
+          find "$PUB_DIR" -name "build.gradle*" -exec sed -i -E 's/compileSdkVersion[[:space:]]+3[0-6]/compileSdkVersion 37/g; s/compileSdk[[:space:]]+3[0-6]/compileSdk 37/g; s/compileSdk[[:space:]]*=[[:space:]]*3[0-6]/compileSdk = 37/g' {} + || true
 
       - name: Build Split Release APK (ARM64)
         working-directory: ${{ steps.locate.outputs.dir }}
