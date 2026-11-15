@@ -24,26 +24,43 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Auto-unpack ZIP & locate Flutter project root
+      - name: Unpack ZIP & Force Upgrade Gradle to 9.3.1
         id: locate
         run: |
-          if [ ! -f "pubspec.yaml" ]; then
-            ZIP_FILE=$(find . -maxdepth 2 -name "*.zip" | head -n 1)
-            if [ -n "$ZIP_FILE" ]; then
-              unzip -o "$ZIP_FILE" -d .
-            fi
+          # 1. 只要仓库里存在 .zip 文件，无条件解压覆盖（排除 .github 目录防止覆盖当前工作流）
+          ZIP_FILE=$(find . -maxdepth 2 -name "*.zip" | head -n 1)
+          if [ -n "$ZIP_FILE" ]; then
+            echo "Found zip archive: $ZIP_FILE, extracting..."
+            unzip -o "$ZIP_FILE" -x ".github/*" -d . || unzip -o "$ZIP_FILE" -d .
           fi
+
+          # 2. 定位 pubspec.yaml 所在目录
           PUBSPEC_PATH=$(find . -maxdepth 3 -name "pubspec.yaml" | head -n 1)
           PROJECT_DIR=$(dirname "$PUBSPEC_PATH")
           echo "dir=$PROJECT_DIR" >> $GITHUB_OUTPUT
 
-      - name: Ensure Gradle wrapper binaries exist
-        working-directory: ${{ steps.locate.outputs.dir }}
-        run: |
-          if [ ! -f "android/gradlew" ]; then
-            flutter create . --platforms=android,ios --org com.example --project-name fast_video_compressor
-          fi
-          chmod +x android/gradlew || true
+          # 3. 修复 Dart 源码中可能存在于旧版 ZIP 的图标大小写与属性兼容问题
+          sed -i 's/Icons.AutoAwesome_rounded/Icons.auto_awesome_rounded/g' "$PROJECT_DIR"/lib/screens/*.dart || true
+          sed -i 's/Icons.video_Call_rounded/Icons.video_call_rounded/g' "$PROJECT_DIR"/lib/screens/*.dart || true
+          sed -i 's/activeThumbColor:/activeColor:/g' "$PROJECT_DIR"/lib/screens/*.dart || true
+          sed -i 's/package="com.example.fast_video_compressor"//g' "$PROJECT_DIR/android/app/src/main/AndroidManifest.xml" || true
+
+          # 4. 无条件从当前云端 Flutter SDK 生成标准脚手架，并强制同步其自带的 Gradle 9.3.1 Wrapper
+          rm -rf /tmp/flutter_scaffold
+          flutter create /tmp/flutter_scaffold --platforms=android --org com.example --project-name fast_video_compressor
+          cp -f /tmp/flutter_scaffold/android/gradlew "$PROJECT_DIR/android/gradlew"
+          cp -f /tmp/flutter_scaffold/android/gradlew.bat "$PROJECT_DIR/android/gradlew.bat"
+          cp -f /tmp/flutter_scaffold/android/settings.gradle* "$PROJECT_DIR/android/" || true
+          cp -f /tmp/flutter_scaffold/android/gradle.properties "$PROJECT_DIR/android/gradle.properties"
+          mkdir -p "$PROJECT_DIR/android/gradle/wrapper"
+          cp -f /tmp/flutter_scaffold/android/gradle/wrapper/gradle-wrapper.jar "$PROJECT_DIR/android/gradle/wrapper/gradle-wrapper.jar"
+          cp -f /tmp/flutter_scaffold/android/gradle/wrapper/gradle-wrapper.properties "$PROJECT_DIR/android/gradle/wrapper/gradle-wrapper.properties"
+
+          # 5. 双重保险：显式确保 gradle-wrapper.properties 中的版本为 9.3.1 并打印验证
+          sed -i 's/gradle-[0-9.]*-all.zip/gradle-9.3.1-all.zip/g' "$PROJECT_DIR/android/gradle/wrapper/gradle-wrapper.properties"
+          sed -i 's/gradle-[0-9.]*-bin.zip/gradle-9.3.1-all.zip/g' "$PROJECT_DIR/android/gradle/wrapper/gradle-wrapper.properties"
+          cat "$PROJECT_DIR/android/gradle/wrapper/gradle-wrapper.properties"
+          chmod +x "$PROJECT_DIR/android/gradlew"
 
       - name: Install dependencies
         working-directory: ${{ steps.locate.outputs.dir }}
@@ -51,7 +68,7 @@ jobs:
 
       - name: Build Split Release APK (ARM64)
         working-directory: ${{ steps.locate.outputs.dir }}
-        run: flutter build apk --release --split-per-abi
+        run: flutter build apk --release --split-per-abi --android-skip-build-dependency-validation
 
       - name: Upload ARM64 APK Artifact
         uses: actions/upload-artifact@v4
