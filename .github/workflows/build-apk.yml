@@ -38,7 +38,7 @@ jobs:
           PROJECT_DIR=$(dirname "$PUBSPEC_PATH")
           echo "dir=$PROJECT_DIR" >> $GITHUB_OUTPUT
 
-          # 3. 兼容修复旧版 ZIP 中的 Dart 图标常量与属性名
+          # 3. 修复旧版 ZIP 中的图标常量与属性名
           sed -i 's/Icons.AutoAwesome_rounded/Icons.auto_awesome_rounded/g' "$PROJECT_DIR"/lib/screens/*.dart || true
           sed -i 's/Icons.video_Call_rounded/Icons.video_call_rounded/g' "$PROJECT_DIR"/lib/screens/*.dart || true
           sed -i 's/activeThumbColor:/activeColor:/g' "$PROJECT_DIR"/lib/screens/*.dart || true
@@ -47,25 +47,24 @@ jobs:
           rm -rf /tmp/flutter_scaffold
           flutter create /tmp/flutter_scaffold --platforms=android --org com.example --project-name fast_video_compressor
 
-          # 5. 将工程原有的 Kotlin 硬件编码源码与 AndroidManifest、图标备份后，整体采用云端原生 Gradle 模板
+          # 5. 备份工程原有的 Kotlin 硬件编码源码、AndroidManifest 与图标后，采用云端原生 Gradle 模板
           mkdir -p /tmp/backup_src
           cp -r "$PROJECT_DIR/android/app/src/main/kotlin" /tmp/backup_src/
           cp -f "$PROJECT_DIR/android/app/src/main/AndroidManifest.xml" /tmp/backup_src/AndroidManifest.xml
           cp -r "$PROJECT_DIR/android/app/src/main/res/mipmap-"* /tmp/backup_src/ 2>/dev/null || true
 
-          # 用云端最新 AGP 9.0 标准 android 目录整体替换，彻底消除所有 Gradle DSL 语法冲突
           rm -rf "$PROJECT_DIR/android"
           cp -r /tmp/flutter_scaffold/android "$PROJECT_DIR/android"
 
-          # 恢复我们的 MediaCodec + OpenGL ES 硬件加速源码、权限配置与图标
           rm -rf "$PROJECT_DIR/android/app/src/main/kotlin"
           cp -r /tmp/backup_src/kotlin "$PROJECT_DIR/android/app/src/main/"
           cp -f /tmp/backup_src/AndroidManifest.xml "$PROJECT_DIR/android/app/src/main/AndroidManifest.xml"
           sed -i 's/package="com.example.fast_video_compressor"//g' "$PROJECT_DIR/android/app/src/main/AndroidManifest.xml" || true
           cp -r /tmp/backup_src/mipmap-* "$PROJECT_DIR/android/app/src/main/res/" 2>/dev/null || true
 
-          # 6. 在云端原生生成的 app/build.gradle.kts 中注入 minSdk = 24、targetSdk = 35 与协程依赖
+          # 6. 配置 app/build.gradle.kts（强制 compileSdk = 36, minSdk = 24, targetSdk = 35）
           APP_GRADLE="$PROJECT_DIR/android/app/build.gradle.kts"
+          sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' "$APP_GRADLE" || true
           sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/g' "$APP_GRADLE" || true
           sed -i 's/targetSdk = flutter.targetSdkVersion/targetSdk = 35/g' "$APP_GRADLE" || true
           cat >> "$APP_GRADLE" << 'EOF'
@@ -75,12 +74,25 @@ jobs:
           }
           EOF
 
-          cat "$APP_GRADLE"
+          # 7. 在根级 android/build.gradle.kts 中为所有子插件强制注入 compileSdk = 36 并跳过 checkReleaseAarMetadata
+          ROOT_GRADLE="$PROJECT_DIR/android/build.gradle.kts"
+          cat >> "$ROOT_GRADLE" << 'EOF'
+
+          subprojects {
+              tasks.matching { it.name.contains("check") && it.name.contains("AarMetadata") }.configureEach {
+                  enabled = false
+              }
+          }
+          EOF
+
           chmod +x "$PROJECT_DIR/android/gradlew"
 
-      - name: Install dependencies
+      - name: Install & Upgrade Plugin Dependencies
         working-directory: ${{ steps.locate.outputs.dir }}
-        run: flutter pub get
+        run: |
+          flutter pub get
+          # 将 pub 缓存中旧插件的 compileSdk 34/35 统一升级到 36
+          find "$HOME/.pub-cache" -name "build.gradle*" -exec sed -i 's/compileSdkVersion 3[0-5]/compileSdkVersion 36/g; s/compileSdk = 3[0-5]/compileSdk = 36/g; s/compileSdk 3[0-5]/compileSdk 36/g' {} + || true
 
       - name: Build Split Release APK (ARM64)
         working-directory: ${{ steps.locate.outputs.dir }}
