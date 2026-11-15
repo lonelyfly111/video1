@@ -24,38 +24,58 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Unpack ZIP & Sync Native Flutter Gradle 9.5.0+ Wrapper
+      - name: Unpack ZIP & Rebuild Native AGP 9.0 Android Scaffold
         id: locate
         run: |
-          # 1. 解压仓库中的 .zip（排除 .github 目录防止覆盖当前工作流）
+          # 1. 解压仓库中的 .zip（排除 .github 目录）
           ZIP_FILE=$(find . -maxdepth 2 -name "*.zip" | head -n 1)
           if [ -n "$ZIP_FILE" ]; then
             unzip -o "$ZIP_FILE" -x ".github/*" -d . || unzip -o "$ZIP_FILE" -d .
           fi
 
-          # 2. 定位 pubspec.yaml 所在目录
+          # 2. 定位工程根目录
           PUBSPEC_PATH=$(find . -maxdepth 3 -name "pubspec.yaml" | head -n 1)
           PROJECT_DIR=$(dirname "$PUBSPEC_PATH")
           echo "dir=$PROJECT_DIR" >> $GITHUB_OUTPUT
 
-          # 3. 兼容修复旧版 ZIP 中的图标命名与 Manifest 属性
+          # 3. 兼容修复旧版 ZIP 中的 Dart 图标常量与属性名
           sed -i 's/Icons.AutoAwesome_rounded/Icons.auto_awesome_rounded/g' "$PROJECT_DIR"/lib/screens/*.dart || true
           sed -i 's/Icons.video_Call_rounded/Icons.video_call_rounded/g' "$PROJECT_DIR"/lib/screens/*.dart || true
           sed -i 's/activeThumbColor:/activeColor:/g' "$PROJECT_DIR"/lib/screens/*.dart || true
-          sed -i 's/package="com.example.fast_video_compressor"//g' "$PROJECT_DIR/android/app/src/main/AndroidManifest.xml" || true
 
-          # 4. 直接从云端当前 Flutter SDK 生成标准模板并完整继承其自带的 Gradle 9.5.0+ 与 AGP 版本（绝不手动降级）
+          # 4. 使用云端当前 Flutter SDK 生成 100% 兼容 AGP 9.0 的全新 Android 原生脚手架
           rm -rf /tmp/flutter_scaffold
           flutter create /tmp/flutter_scaffold --platforms=android --org com.example --project-name fast_video_compressor
-          cp -f /tmp/flutter_scaffold/android/gradlew "$PROJECT_DIR/android/gradlew"
-          cp -f /tmp/flutter_scaffold/android/gradlew.bat "$PROJECT_DIR/android/gradlew.bat"
-          cp -f /tmp/flutter_scaffold/android/settings.gradle* "$PROJECT_DIR/android/" || true
-          cp -f /tmp/flutter_scaffold/android/gradle.properties "$PROJECT_DIR/android/gradle.properties"
-          mkdir -p "$PROJECT_DIR/android/gradle/wrapper"
-          cp -f /tmp/flutter_scaffold/android/gradle/wrapper/gradle-wrapper.jar "$PROJECT_DIR/android/gradle/wrapper/gradle-wrapper.jar"
-          cp -f /tmp/flutter_scaffold/android/gradle/wrapper/gradle-wrapper.properties "$PROJECT_DIR/android/gradle/wrapper/gradle-wrapper.properties"
 
-          cat "$PROJECT_DIR/android/gradle/wrapper/gradle-wrapper.properties"
+          # 5. 将工程原有的 Kotlin 硬件编码源码与 AndroidManifest、图标备份后，整体采用云端原生 Gradle 模板
+          mkdir -p /tmp/backup_src
+          cp -r "$PROJECT_DIR/android/app/src/main/kotlin" /tmp/backup_src/
+          cp -f "$PROJECT_DIR/android/app/src/main/AndroidManifest.xml" /tmp/backup_src/AndroidManifest.xml
+          cp -r "$PROJECT_DIR/android/app/src/main/res/mipmap-"* /tmp/backup_src/ 2>/dev/null || true
+
+          # 用云端最新 AGP 9.0 标准 android 目录整体替换，彻底消除所有 Gradle DSL 语法冲突
+          rm -rf "$PROJECT_DIR/android"
+          cp -r /tmp/flutter_scaffold/android "$PROJECT_DIR/android"
+
+          # 恢复我们的 MediaCodec + OpenGL ES 硬件加速源码、权限配置与图标
+          rm -rf "$PROJECT_DIR/android/app/src/main/kotlin"
+          cp -r /tmp/backup_src/kotlin "$PROJECT_DIR/android/app/src/main/"
+          cp -f /tmp/backup_src/AndroidManifest.xml "$PROJECT_DIR/android/app/src/main/AndroidManifest.xml"
+          sed -i 's/package="com.example.fast_video_compressor"//g' "$PROJECT_DIR/android/app/src/main/AndroidManifest.xml" || true
+          cp -r /tmp/backup_src/mipmap-* "$PROJECT_DIR/android/app/src/main/res/" 2>/dev/null || true
+
+          # 6. 在云端原生生成的 app/build.gradle.kts 中注入 minSdk = 24、targetSdk = 35 与协程依赖
+          APP_GRADLE="$PROJECT_DIR/android/app/build.gradle.kts"
+          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/g' "$APP_GRADLE" || true
+          sed -i 's/targetSdk = flutter.targetSdkVersion/targetSdk = 35/g' "$APP_GRADLE" || true
+          cat >> "$APP_GRADLE" << 'EOF'
+
+          dependencies {
+              implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+          }
+          EOF
+
+          cat "$APP_GRADLE"
           chmod +x "$PROJECT_DIR/android/gradlew"
 
       - name: Install dependencies
@@ -64,7 +84,7 @@ jobs:
 
       - name: Build Split Release APK (ARM64)
         working-directory: ${{ steps.locate.outputs.dir }}
-        run: flutter build apk --release --split-per-abi --android-skip-build-dependency-validation
+        run: flutter build apk --release --split-per-abi
 
       - name: Upload ARM64 APK Artifact
         uses: actions/upload-artifact@v4
